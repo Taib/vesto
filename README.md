@@ -42,6 +42,7 @@ pytest # run python tests
 Algorithms:
 
 - FLAT: Brute force loop over all vectors in a collection.
+- HNSW: Hierarchical Navigable Small World - An implementation from the paper
 
 Plugin:
 

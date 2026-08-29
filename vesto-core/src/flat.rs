@@ -12,17 +12,7 @@ pub struct VestoFlatIndex {
 }
 
 impl VestoFlatIndex {
-    pub fn len(&self) -> usize {
-        self.data.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
-    }
-}
-
-impl VestoIndex for VestoFlatIndex {
-    fn new(name: &str, vfield_name: &str, metric_name: crate::metrics::MetricsName) -> Self
+    pub fn new(name: &str, vfield_name: &str, metric_name: crate::metrics::MetricsName) -> Self
     where
         Self: Sized,
     {
@@ -33,7 +23,21 @@ impl VestoIndex for VestoFlatIndex {
             vfield_name: String::from(vfield_name),
         }
     }
-    fn insert(&mut self, data: Vec<EntityId>) -> Result<(), VestoError> {
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+}
+
+impl VestoIndex for VestoFlatIndex {
+    fn insert(
+        &mut self,
+        data: Vec<EntityId>,
+        _: Option<&dyn crate::store::VestoStoreTrait>,
+    ) -> Result<(), VestoError> {
         self.data.extend(data);
         Ok(())
     }
@@ -85,7 +89,7 @@ mod test {
                 array![0.0, 0.0, 1.0],
             ])
             .unwrap();
-        index.insert(ids).unwrap();
+        index.insert(ids, None).unwrap();
         let results = index.search(&store, &array![1.0, 0.1, 0.0], 2).unwrap();
         assert_eq!(results[0].1, EntityId(1));
     }

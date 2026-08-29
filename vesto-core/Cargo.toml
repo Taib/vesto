@@ -7,4 +7,5 @@ edition = "2024"
 bytemuck = "1.25"
 ndarray = "0.17.2"
 postcard = { version = "1", features = ["alloc"] }
+rand = "0.10.2"
 serde = { version = "1.0.229", features = ["derive"] }

@@ -1,17 +1,17 @@
 use crate::{
     error::VestoError,
-    metrics::MetricsName,
     store::VestoStoreTrait,
     types::{EntityId, Score, Vector},
 };
 
 pub trait VestoIndex {
-    fn new(name: &str, vfield_name: &str, metric_name: MetricsName) -> Self
-    where
-        Self: Sized;
     fn name(&self) -> String;
     fn vfield_name(&self) -> String;
-    fn insert(&mut self, data: Vec<EntityId>) -> Result<(), VestoError>;
+    fn insert(
+        &mut self,
+        data: Vec<EntityId>,
+        store_get: Option<&dyn crate::store::VestoStoreTrait>,
+    ) -> Result<(), VestoError>;
     fn search(
         &self,
         store_get: &dyn VestoStoreTrait,

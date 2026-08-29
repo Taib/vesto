@@ -11,7 +11,9 @@ pub enum VestoError {
     DuplicateIndex,
     KeyNotFound,
     DuplicateCollection,
-    UnknownIndexType
+    UnknownIndexType,
+    RequiredParameterMissing { param: String },
+    EmptyIndex
 }
 impl std::fmt::Display for VestoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -32,6 +34,10 @@ impl std::fmt::Display for VestoError {
             Self::KeyNotFound => write!(f, "Key Not Found"),
             Self::DuplicateCollection => write!(f, "Duplicate Collection"),
             Self::UnknownIndexType => write!(f, "Unknown Index Type"),
+            Self::RequiredParameterMissing { param } => {
+                write!(f, "Required parameter {param:?} is missing.")
+            },
+            Self::EmptyIndex => write!(f, "Empty Index"),
         }
     }
 }

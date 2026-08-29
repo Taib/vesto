@@ -10,6 +10,7 @@ mod index;
 mod metrics;
 pub mod collection;
 mod flat;
+mod hnsw;
 
 use error::VestoError;
 use collection::{Collection, CollectionID};

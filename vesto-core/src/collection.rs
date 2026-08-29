@@ -3,12 +3,33 @@ use std::collections::HashMap;
 use crate::{
     error::VestoError,
     flat::VestoFlatIndex,
+    hnsw::VestoHSNWIndex,
     index::VestoIndex,
     metrics::parse_metric_from_str,
     store::{VestoStore, VestoStoreTrait},
     types::{EntityId, Vector},
 };
 
+// TODO
+// pub struct VectorField {
+//     name: String,
+//     store: Box<dyn VectorStore>,
+//     indexes: HashMap<String, Box<dyn VectorIndex>>,
+// }
+// pub enum Value {
+//     Text(String),
+//     Int(i64),
+//     Float(f64),
+//     Bool(bool),
+// }
+// pub struct Metadata {
+//     fields: HashMap<String, Value>,
+// }
+// pub struct Collection {
+//     name: String,
+//     vector_fields: HashMap<String, VectorField>,
+//     metadata: HashMap<EntityId, Metadata>,
+// }
 pub type CollectionID = String;
 
 pub struct Schema {
@@ -35,7 +56,7 @@ impl Collection {
     pub fn insert(&mut self, vectors: Vec<Vector>) -> Result<Vec<EntityId>, VestoError> {
         let ids = self.store.insert(vectors)?;
         for index in self.indexes.values_mut() {
-            index.insert(ids.clone() /* vector refs */)?;
+            index.insert(ids.clone(), Some(&self.store) /* vector refs */)?;
         }
         Ok(ids)
     }
@@ -53,6 +74,12 @@ impl Collection {
                 &name,
                 &self.schema.vfield_name,
                 metric_name,
+            )),
+            "hnsw" => Box::new(VestoHSNWIndex::new(
+                &name,
+                &self.schema.vfield_name,
+                metric_name,
+                None,
             )),
             _ => return Err(VestoError::UnknownIndexType),
         };

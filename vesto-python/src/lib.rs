@@ -17,6 +17,11 @@ struct PyVestoCollection {
 
 #[pymethods]
 impl PyVestoCollection {
+    /// Create an index and insert it in the collection.
+    ///
+    /// Args:
+    ///     name: index name
+    ///     index_type: type of index (FLAT, HSNW)
     fn add_index(&mut self, name: String, index_type: String) -> PyResult<()> {
         let mut collection = self.inner.lock().map_err(to_py)?;
         collection
@@ -26,6 +31,11 @@ impl PyVestoCollection {
         Ok(())
     }
 
+    /// Insert vectors in the collection. This will update all the indexes attached.
+    /// Return the entity_ids of the vectors inserted.
+    ///
+    /// Args:
+    ///     vectors: list of vectors
     fn insert(&self, vectors: Vec<Vec<f32>>) -> PyResult<Vec<u64>> {
         let vectors = vectors.into_iter().map(Array1::from).collect();
         let ids = {
@@ -35,6 +45,12 @@ impl PyVestoCollection {
         Ok(ids.into_iter().map(|id| id.0).collect())
     }
 
+    /// Search a vector using a given index.
+    ///
+    /// Args:
+    ///     index_name: index name
+    ///     query: query vector
+    ///     top_k: top k matches
     fn search(
         &self,
         index_name: &str,
@@ -69,6 +85,13 @@ impl PyVesto {
         }
     }
 
+    /// Create a collection and return a handle to it.
+    ///
+    /// Args:
+    ///     name: collection name
+    ///     vfield_name: vector field name
+    ///     metric_name: metric name
+    ///     dim: vector dimensionality
     pub fn add_collection(
         &mut self,
         name: String,
@@ -88,16 +111,26 @@ impl PyVesto {
             .map_err(|err| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{err:?}")))?;
         Ok(PyVestoCollection { inner: shared })
     }
+
+    /// Return a handle to a collection.
+    ///
+    /// Args:
+    ///     name: collection name
     fn get_collection(&self, name: &str) -> PyResult<PyVestoCollection> {
         self.inner
             .get_collection(name)
             .map(|inner| PyVestoCollection { inner })
             .ok_or_else(|| PyValueError::new_err(format!("No collection {name:?}")))
     }
+
+    /// Return the number of collections.
+    ///
     fn __len__(&self) -> usize {
         self.inner.len()
     }
 
+    /// For printing purposes.
+    ///
     fn __repr__(&self) -> String {
         format!("Vesto(collections={})", self.inner.len())
     }
