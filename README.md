@@ -2,14 +2,64 @@
 
 Playing with **Vector Store** algorithms.
 
+```sh
+# Usage
+
+# cd vesto
+cargo build # build all workspaces
+cargo test -p vesto-core # test the vesto core package
+
+# cd vesto-python
+# You should be in a python-venv here 
+maturin develop # build and install the python package
+pytest # run python tests
+```
+
+## Layout
+
+- `vesto-core/` — the storage and search engine, in Rust.
+  - `lib.rs` — `Vesto`, a registry of named collections.
+  - `collection.rs` — `Collection`: a schema, a store, and its indexes.
+  - `store.rs` — `VestoStore`: id -> vector storage, with save/load to disk.
+  - `index.rs` — `VestoIndex` trait implemented by each index type.
+  - `flat.rs` — `VestoFlatIndex`: brute-force search over all vectors.
+  - `metrics.rs` — distance metrics (`L2`, `Cosine`).
+  - `types.rs` — shared types (`EntityId`, `Vector`, `Score`).
+  - `error.rs` — `VestoError`.
+- `vesto-python/` — PyO3 bindings exposing `Vesto` and `VestoCollection` to Python.
+
+## Concepts
+
+<p align="center">
+ <img src="./concepts.png" alt="Concepts graphic" />
+</p> 
+
+- **Collection**: a named set of vectors sharing a schema (dimension, vector field name, metric). Holds a `VestoStore` and any number of named indexes.
+- **Store**: the source of truth mapping `EntityId -> Vector`. Indexes query it rather than duplicating vector data.
+- **Index**: a pluggable search strategy over a collection's store. Currently only `flat` (brute force) is implemented.
+
+
 Algorithms:
 
-- FLAT: Brute force loop over all vectors in the DB.
+- FLAT: Brute force loop over all vectors in a collection.
 
 Plugin:
 
-- Python: worked on a simple python-binding.
+- Python: PyO3 bindings (`vesto-python`) mirroring the Rust API — `Vesto`, `add_collection`, `add_index`, `insert`, `search`.
 
 Note:
 
-- Support in-memory store.
+- In-memory store, with binary save/load to disk (`VestoStore::save` / `load`).
+
+## TODO
+
+Being a playground on vector DBs, there are a lot of cool features I can think of:
+
+- HNSW index
+- IVF index
+- Proper vector field support
+- GPU support
+- MMAP store (*e.g.* to support DBs larger than the RAM)
+- Packaging (python, rust)
+- Packaging cloud (docker, k8s)
+- etc.
