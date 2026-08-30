@@ -1,9 +1,11 @@
 /*
-An implementation of the HNSW (Hierarchical Navigable Small World) 
+An implementation of the HNSW (Hierarchical Navigable Small World)
 algorithm for approximate nearest neighbor search.
 Reference:
  - https://arxiv.org/abs/1603.09320
 */
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::{
     cmp::min,
     collections::{HashMap, HashSet},
@@ -17,6 +19,22 @@ use crate::{
     types::{EntityId, Score, Vector},
 };
 
+#[derive(Clone, Copy, PartialEq)]
+struct Candidate {
+    dist: f32,
+    id: EntityId,
+}
+impl Eq for Candidate {}
+impl PartialOrd for Candidate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Candidate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.dist.total_cmp(&other.dist) // larger dist = "greater"
+    }
+}
 #[derive(Default)]
 struct Layer {
     // node -> its neighbors on the layer
@@ -30,6 +48,10 @@ struct HNSWGraph {
 }
 
 impl HNSWGraph {
+    fn dist(&self, store_get: &dyn VestoStoreTrait, id: &EntityId, query: &Vector) -> f32 {
+        let v = store_get.get(id).unwrap();
+        self.metric.distance(&v, query).unwrap()
+    }
     fn knn_search(
         &self,                           //
         store_get: &dyn VestoStoreTrait, //
@@ -47,7 +69,7 @@ impl HNSWGraph {
         }
         W = self.search_layer(store_get, &query, ep, ef, 0);
 
-        Ok(self.select_neighbors(store_get, &query, &W, k, 0)?)
+        Ok(self.select_neighbors(store_get, &query, &W, k)?)
     }
     fn insert(
         &mut self,
@@ -74,7 +96,7 @@ impl HNSWGraph {
         for lc in (0..min(L, l) + 1).rev() {
             W = self.search_layer(store_get, &query, ep, ef_construction, lc);
             let neighbors = self
-                .select_neighbors(store_get, &query, &W, M_max, lc)
+                .select_neighbors(store_get, &query, &W, M)
                 .unwrap();
             // add bidirectionall connectionts from neighbors to q at layer lc
             self.layers[lc]
@@ -90,7 +112,7 @@ impl HNSWGraph {
                     // shrink connections of e
                     let e_vector = store_get.get(&e).unwrap();
                     let e_new_conn = self
-                        .select_neighbors(store_get, &e_vector, &e_conn, M, lc)
+                        .select_neighbors(store_get, &e_vector, &e_conn, M_max)
                         .unwrap();
                     // update neighbourhood of e at layer lc to e_new_conn;
                     self.layers[lc].adjacency.remove(&e);
@@ -129,7 +151,6 @@ impl HNSWGraph {
         query: &Vector,
         W: &Vec<EntityId>,
         M: usize,
-        _lc: usize,
     ) -> Result<Vec<(f32, EntityId)>, VestoError> {
         let mut scores = W
             .iter()
@@ -147,49 +168,65 @@ impl HNSWGraph {
         Ok(scores)
     }
     fn search_layer(
-        &self,                           //
-        store_get: &dyn VestoStoreTrait, //
-        query: &Vector,                  // query element
-        ep: EntityId,                    // enter points
-        ef: usize,                       // # of nearest to q element to return
-        l: usize,                        // layer number
+        &self,
+        store_get: &dyn VestoStoreTrait,
+        query: &Vector,
+        ep: EntityId,
+        ef: usize,
+        l: usize,
     ) -> Vec<EntityId> {
-        let ids = ep.clone();
-        let mut W = vec![ids]; // dynamic list of found nearest neighbors
-        let mut C = vec![ids]; // list of candidates
-        let mut v: HashSet<EntityId> = HashSet::new();
-        v.insert(ids); // set of visited elements
+        let ep_dist = self.dist(store_get, &ep, query);
 
-        while !C.is_empty() {
-            let (c_pos, c) = self.nearest_element(store_get, &C, query).unwrap();
-            C.remove(c_pos); // <-- extract: pop c out of the candidate set
-            let (_, f) = self.furthest_element(store_get, &W, query).unwrap();
-            let c_vector = store_get.get(&c).unwrap();
-            let f_vector = store_get.get(&f).unwrap();
-            let f_vector_dist = self.metric.distance(&f_vector, query).unwrap();
-            if self.metric.distance(query, &c_vector).unwrap()
-                > self.metric.distance(&f_vector, query).unwrap()
-            {
-                break; // all elements in W are evaluated
+        let mut visited: HashSet<EntityId> = HashSet::new();
+        visited.insert(ep);
+
+        // C: min-heap (nearest on top) - Reverse flips the max-heap
+        let mut candidates: BinaryHeap<Reverse<Candidate>> = BinaryHeap::new();
+        candidates.push(Reverse(Candidate {
+            dist: ep_dist,
+            id: ep,
+        }));
+
+        // W: max-heap (furthest on top) - result set
+        let mut result: BinaryHeap<Candidate> = BinaryHeap::new();
+        result.push(Candidate {
+            dist: ep_dist,
+            id: ep,
+        });
+
+        while let Some(Reverse(c)) = candidates.pop() {
+            // furthest currently in the result set
+            let furthest = result.peek().map(|f| f.dist).unwrap_or(f32::INFINITY);
+            if c.dist > furthest {
+                // all elements in W (result set) are evaluated
+                // nearest remaining candidate is worse than our worst kept result
+                break; 
             }
-            for e in self.neighbourhood(&c, l) {
-                if !v.contains(&e) {
-                    v.insert(e);
-                    let e_vector = store_get.get(&e).unwrap();
-                    if self.metric.distance(&e_vector, query).unwrap() < f_vector_dist
-                        || W.len() < ef
-                    {
-                        C.push(e);
-                        W.push(e);
-                        if W.len() > ef {
-                            let (fp, _) = self.furthest_element(store_get, &W, query).unwrap();
-                            W.remove(fp);
+
+            for e in self.neighbourhood(&c.id, l) {
+                if visited.insert(e) {
+                    // true only if "e" was newly inserted
+                    let e_dist = self.dist(store_get, &e, query);
+                    let furthest = result.peek().map(|f| f.dist).unwrap_or(f32::INFINITY);
+
+                    if e_dist < furthest || result.len() < ef {
+                        candidates.push(Reverse(Candidate {
+                            dist: e_dist,
+                            id: e,
+                        }));
+                        result.push(Candidate {
+                            dist: e_dist,
+                            id: e,
+                        });
+                        if result.len() > ef {
+                            result.pop(); // evict furthest - O(log n), always the right one
                         }
                     }
                 }
             }
         }
-        return W;
+
+        result.into_iter().map(|c| c.id).collect()
     }
     fn neighbourhood(&self, id: &EntityId, l: usize) -> Vec<EntityId> {
         return self.layers[l]
@@ -222,30 +259,6 @@ impl HNSWGraph {
             }
         }
         return Some((min_pos, response));
-    }
-    fn furthest_element(
-        &self,
-        store_get: &dyn VestoStoreTrait, //
-        set: &Vec<EntityId>,
-        query: &Vector, // query element
-    ) -> Option<(usize, EntityId)> {
-        if set.is_empty() {
-            return None;
-        }
-        let mut max_score = -f32::INFINITY;
-        let mut response = set[0];
-        let mut max_pos: usize = 0;
-        for (pos, el) in set.iter().enumerate() {
-            if let Some(vector) = store_get.get(el) {
-                let score = self.metric.distance(query, &vector).unwrap();
-                if score > max_score {
-                    response = el.clone();
-                    max_score = score;
-                    max_pos = pos;
-                }
-            }
-        }
-        return Some((max_pos, response));
     }
 }
 

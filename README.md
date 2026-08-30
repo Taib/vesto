@@ -23,6 +23,7 @@ pytest # run python tests
   - `store.rs` — `VestoStore`: id -> vector storage, with save/load to disk.
   - `index.rs` — `VestoIndex` trait implemented by each index type.
   - `flat.rs` — `VestoFlatIndex`: brute-force search over all vectors.
+  - `hnsw.rs` — `VestoHNSWIndex`: Hierarchical Navigable Small World search.
   - `metrics.rs` — distance metrics (`L2`, `Cosine`).
   - `types.rs` — shared types (`EntityId`, `Vector`, `Score`).
   - `error.rs` — `VestoError`.
@@ -42,7 +43,7 @@ pytest # run python tests
 Algorithms:
 
 - FLAT: Brute force loop over all vectors in a collection.
-- HNSW: Hierarchical Navigable Small World - An implementation from the paper
+- HNSW: Hierarchical Navigable Small World - An implementation from the paper (with Heap based search-layer alg. 2)
 
 Plugin:
 
@@ -56,11 +57,11 @@ Note:
 
 Being a playground on vector DBs, there are a lot of cool features I can think of:
 
-- HNSW index
 - IVF index
 - Proper vector field support
 - GPU support
 - MMAP store (*e.g.* to support DBs larger than the RAM)
+- HNSW index - improve knn and bulk inserts
 - Packaging (python, rust)
 - Packaging cloud (docker, k8s)
 - etc.
