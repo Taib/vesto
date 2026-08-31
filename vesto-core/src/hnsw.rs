@@ -49,7 +49,7 @@ struct HNSWGraph {
 
 impl HNSWGraph {
     fn dist(&self, store_get: &dyn VestoStoreTrait, id: &EntityId, query: &Vector) -> f32 {
-        let v = store_get.get(id).unwrap();
+        let v = store_get.get_view(id).unwrap();
         self.metric.distance(&v, query).unwrap()
     }
     fn knn_search(
@@ -60,14 +60,15 @@ impl HNSWGraph {
         ef: usize,                       // size of the dynamic candidate list
     ) -> Result<Vec<(f32, EntityId)>, VestoError> {
         let mut W; // set for the current nearest elements
-        let mut ep = self.entry_point.ok_or(VestoError::EmptyIndex)?; // get enter point for hnsw
+        let mut ep = vec![self.entry_point.ok_or(VestoError::EmptyIndex)?]; // get enter point for hnsw
         let L = self.layers.len().saturating_sub(1); // level of ep 
 
         for lc in (1..=L).rev() {
-            W = self.search_layer(store_get, &query, ep, 1, lc);
-            (_, ep) = self.nearest_element(store_get, &W, &query).unwrap();
+            W = self.search_layer(store_get, &query, &ep, 1, lc);
+            let (_, n_el) = self.nearest_element(store_get, &W, &query).unwrap();
+            ep = vec![n_el];
         }
-        W = self.search_layer(store_get, &query, ep, ef, 0);
+        W = self.search_layer(store_get, &query, &ep, ef, 0);
 
         Ok(self.select_neighbors(store_get, &query, &W, k)?)
     }
@@ -81,7 +82,7 @@ impl HNSWGraph {
         m_l: f32,               // normalization factor for level generation
     ) -> Result<(), VestoError> {
         let mut W;
-        let mut ep = self.entry_point.unwrap_or(item).clone(); // get enter point for hnsw
+        let mut ep = vec![self.entry_point.unwrap_or(item)]; // get entry points for hnsw
         let L = self.layers.len().saturating_sub(1); // top layer fo hnsw
         let l: usize = (-(1.0 - rand::random::<f32>()).ln() * m_l).floor() as usize; // new element's level 
         if self.entry_point.is_none() {
@@ -90,14 +91,14 @@ impl HNSWGraph {
         let query = store_get.get(&item).unwrap();
 
         for lc in (l + 1..=L).rev() {
-            W = self.search_layer(store_get, &query, ep, 1, lc);
-            (_, ep) = self.nearest_element(store_get, &W, &query).unwrap();
+            W = self.search_layer(store_get, &query, &ep, 1, lc);
+            let (_, n_el) = self.nearest_element(store_get, &W, &query).unwrap();
+            ep = vec![n_el];
         }
         for lc in (0..min(L, l) + 1).rev() {
-            W = self.search_layer(store_get, &query, ep, ef_construction, lc);
-            let neighbors = self
-                .select_neighbors(store_get, &query, &W, M)
-                .unwrap();
+            let Mmax = if lc == 0 { M * 2 } else { M_max };
+            W = self.search_layer(store_get, &query, &ep, ef_construction, lc);
+            let neighbors = self.select_neighbors(store_get, &query, &W, M).unwrap();
             // add bidirectionall connectionts from neighbors to q at layer lc
             self.layers[lc]
                 .adjacency
@@ -108,11 +109,11 @@ impl HNSWGraph {
                 self.layers[lc].adjacency.entry(e).or_default().push(item);
                 // shrink connections if needed
                 let e_conn = self.neighbourhood(&e, lc);
-                if e_conn.len() > M_max {
+                if e_conn.len() > Mmax {
                     // shrink connections of e
                     let e_vector = store_get.get(&e).unwrap();
                     let e_new_conn = self
-                        .select_neighbors(store_get, &e_vector, &e_conn, M_max)
+                        .select_neighbors(store_get, &e_vector, e_conn, Mmax)
                         .unwrap();
                     // update neighbourhood of e at layer lc to e_new_conn;
                     self.layers[lc].adjacency.remove(&e);
@@ -121,6 +122,7 @@ impl HNSWGraph {
                         .insert(e, e_new_conn.iter().map(|(_, el)| el.clone()).collect());
                 }
             }
+            ep = W.clone();
         }
         if l > L {
             // set enter point for hnsw to q
@@ -149,7 +151,7 @@ impl HNSWGraph {
         &self,
         store_get: &dyn VestoStoreTrait, //
         query: &Vector,
-        W: &Vec<EntityId>,
+        W: &[EntityId],
         M: usize,
     ) -> Result<Vec<(f32, EntityId)>, VestoError> {
         let mut scores = W
@@ -171,28 +173,29 @@ impl HNSWGraph {
         &self,
         store_get: &dyn VestoStoreTrait,
         query: &Vector,
-        ep: EntityId,
+        ep: &Vec<EntityId>,
         ef: usize,
         l: usize,
     ) -> Vec<EntityId> {
-        let ep_dist = self.dist(store_get, &ep, query);
-
         let mut visited: HashSet<EntityId> = HashSet::new();
-        visited.insert(ep);
 
         // C: min-heap (nearest on top) - Reverse flips the max-heap
         let mut candidates: BinaryHeap<Reverse<Candidate>> = BinaryHeap::new();
-        candidates.push(Reverse(Candidate {
-            dist: ep_dist,
-            id: ep,
-        }));
 
         // W: max-heap (furthest on top) - result set
         let mut result: BinaryHeap<Candidate> = BinaryHeap::new();
-        result.push(Candidate {
-            dist: ep_dist,
-            id: ep,
-        });
+
+        for &e in ep {
+            let ep_dist = self.dist(store_get, &e, query);
+            candidates.push(Reverse(Candidate {
+                dist: ep_dist,
+                id: e,
+            }));
+            result.push(Candidate {
+                dist: ep_dist,
+                id: e,
+            });
+        }
 
         while let Some(Reverse(c)) = candidates.pop() {
             // furthest currently in the result set
@@ -200,23 +203,23 @@ impl HNSWGraph {
             if c.dist > furthest {
                 // all elements in W (result set) are evaluated
                 // nearest remaining candidate is worse than our worst kept result
-                break; 
+                break;
             }
 
             for e in self.neighbourhood(&c.id, l) {
-                if visited.insert(e) {
+                if visited.insert(*e) {
                     // true only if "e" was newly inserted
-                    let e_dist = self.dist(store_get, &e, query);
+                    let e_dist = self.dist(store_get, e, query);
                     let furthest = result.peek().map(|f| f.dist).unwrap_or(f32::INFINITY);
 
                     if e_dist < furthest || result.len() < ef {
                         candidates.push(Reverse(Candidate {
                             dist: e_dist,
-                            id: e,
+                            id: *e,
                         }));
                         result.push(Candidate {
                             dist: e_dist,
-                            id: e,
+                            id: *e,
                         });
                         if result.len() > ef {
                             result.pop(); // evict furthest - O(log n), always the right one
@@ -228,11 +231,11 @@ impl HNSWGraph {
 
         result.into_iter().map(|c| c.id).collect()
     }
-    fn neighbourhood(&self, id: &EntityId, l: usize) -> Vec<EntityId> {
+    fn neighbourhood(&self, id: &EntityId, l: usize) -> &[EntityId] {
         return self.layers[l]
             .adjacency
             .get(&id)
-            .cloned()
+            .map(Vec::as_slice)
             .unwrap_or_default();
     }
 
@@ -252,7 +255,7 @@ impl HNSWGraph {
             if let Some(vector) = store_get.get(el) {
                 let score = self.metric.distance(query, &vector).unwrap();
                 if score < min_score {
-                    response = el.clone();
+                    response = *el;
                     min_score = score;
                     min_pos = pos;
                 }
@@ -262,7 +265,7 @@ impl HNSWGraph {
     }
 }
 
-pub struct VestoHSNWIndex {
+pub struct VestoHNSWIndex {
     name: String,
     vfield_name: String,
     data: HNSWGraph,
@@ -272,24 +275,24 @@ pub struct VestoHSNWIndex {
     ef_construction: usize,
     m_l: f32,
 }
-pub struct VestoHSNWIndexExtraParams {
+pub struct VestoHNSWIndexExtraParams {
     max_connections: usize,           // number of established connections
     max_connections_per_layer: usize, //maximum number of connections for each element per layer
     ef_construction: usize,           // size of the dynamic candidate list
     m_l: f32,                         // normalization factor for level generation
 }
 
-impl VestoHSNWIndex {
+impl VestoHNSWIndex {
     pub fn new(
         name: &str,
         vfield_name: &str,
         metric_name: crate::metrics::MetricsName,
-        extra: Option<VestoHSNWIndexExtraParams>,
+        extra: Option<VestoHNSWIndexExtraParams>,
     ) -> Self
     where
         Self: Sized,
     {
-        let extra = extra.unwrap_or(VestoHSNWIndexExtraParams {
+        let extra = extra.unwrap_or(VestoHNSWIndexExtraParams {
             max_connections: 16,
             max_connections_per_layer: 16,
             ef_construction: 100,
@@ -318,7 +321,7 @@ impl VestoHSNWIndex {
     }
 }
 
-impl VestoIndex for VestoHSNWIndex {
+impl VestoIndex for VestoHNSWIndex {
     fn name(&self) -> String {
         self.name.clone()
     }
@@ -384,23 +387,18 @@ mod recall_test {
             ])
             .unwrap();
 
-        let mut hnsw = VestoHSNWIndex::new("h", "v", crate::metrics::MetricsName::L2, None);
+        let mut hnsw = VestoHNSWIndex::new("h", "v", crate::metrics::MetricsName::L2, None);
         hnsw.insert(ids.clone(), Some(&store)).unwrap();
 
-        // let query = array![1.0, 0.1];
-        // let results = hnsw.search(&store, &query, 2).unwrap();
         let query = array![0.95, 0.08]; // clearly closest to id 1 [0.9, 0.1]
         let results = hnsw.search(&store, &query, 2).unwrap();
         assert_eq!(results[0].1, ids[1]);
-        // println!("results: {:?}", results);
-        // assert!(!results.is_empty(), "search returned nothing");
-        // assert_eq!(results[0].1, ids[1], "nearest should be id 1 (0.9, 0.1)");
     }
 
     #[test]
     fn hnsw_recall_vs_bruteforce() {
         let dim = 10;
-        let n = 100;
+        let n = 1000;
         let mut store = VestoStore::new(dim);
 
         // random vectors
@@ -412,31 +410,44 @@ mod recall_test {
         // build both indexes
         let mut flat = VestoFlatIndex::new("flat", "v", MetricsName::L2);
         flat.insert(ids.clone(), Some(&store)).unwrap();
-        let mut hnsw = VestoHSNWIndex::new("hnsw", "v", MetricsName::L2, None);
+        let mut hnsw = VestoHNSWIndex::new("hnsw", "v", MetricsName::L2, None);
+        let t = std::time::Instant::now();
         hnsw.insert(ids.clone(), Some(&store)).unwrap();
+        println!("hnsw build: {:?}", t.elapsed());
 
         // query with several stored vectors, compare top-10
         let k = 10;
         let mut hits = 0;
         let mut total = 0;
+        let mut avg_flat_search_time = 0.0;
+        let mut avg_hnsw_search_time = 0.0;
         for &qid in ids.iter().take(30) {
             let q = store.get(&qid).unwrap();
+            let t = std::time::Instant::now();
             let truth: HashSet<_> = flat
                 .search(&store, &q, k)
                 .unwrap()
                 .into_iter()
                 .map(|(_, id)| id)
                 .collect();
+            avg_flat_search_time += t.elapsed().as_millis() as f32;
+            let t = std::time::Instant::now();
             let got: HashSet<_> = hnsw
                 .search(&store, &q, k)
                 .unwrap()
                 .into_iter()
                 .map(|(_, id)| id)
                 .collect();
+            avg_hnsw_search_time += t.elapsed().as_millis() as f32;
             hits += truth.intersection(&got).count();
             total += truth.len();
         }
         let recall = hits as f32 / total as f32;
+        avg_flat_search_time /= 30.0;
+        avg_hnsw_search_time /= 30.0;
+        println!("avg flat search time: {avg_flat_search_time:.3} ms");
+        println!("avg hnsw search time: {avg_hnsw_search_time:.3} ms");
+        println!("speedup: {:.2}x", avg_flat_search_time / avg_hnsw_search_time);
         println!("recall@{k} = {recall:.3}");
         assert!(recall > 0.8, "recall too low: {recall}");
     }

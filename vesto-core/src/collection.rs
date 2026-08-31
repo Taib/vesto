@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     error::VestoError,
     flat::VestoFlatIndex,
-    hnsw::VestoHSNWIndex,
+    hnsw::VestoHNSWIndex,
     index::VestoIndex,
     metrics::parse_metric_from_str,
     store::{VestoStore, VestoStoreTrait},
@@ -75,7 +75,7 @@ impl Collection {
                 &self.schema.vfield_name,
                 metric_name,
             )),
-            "hnsw" => Box::new(VestoHSNWIndex::new(
+            "hnsw" => Box::new(VestoHNSWIndex::new(
                 &name,
                 &self.schema.vfield_name,
                 metric_name,

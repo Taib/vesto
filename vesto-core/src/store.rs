@@ -5,6 +5,7 @@ use std::{collections::HashMap, path::Path};
 
 use ndarray::{Array2, Axis};
 
+use crate::types::VectorView;
 use crate::{
     error::VestoError,
     types::{EntityId, Vector},
@@ -12,6 +13,7 @@ use crate::{
 pub trait VestoStoreTrait {
     fn insert(&mut self, vectors: Vec<Vector>) -> Result<Vec<EntityId>, VestoError>;
     fn get(&self, id: &EntityId) -> Option<Vector>;
+    fn get_view(&self, id: &EntityId) -> Option<VectorView<'_>>;
     // fn delete(&mut self, id: EntityId) -> Result<(), VestoError>;
 }
 
@@ -77,6 +79,11 @@ impl VestoStoreTrait for VestoStore {
     fn get(&self, id: &EntityId) -> Option<Vector> {
         let &pos = self.id_to_pos.get(id)?;
         Some(self.vectors.row(pos).to_owned())
+    }
+
+    fn get_view(&self, id: &EntityId) -> Option<VectorView<'_>> {
+        let pos = self.id_to_pos.get(id)?;
+        Some(self.vectors.row(*pos))
     }
 }
 

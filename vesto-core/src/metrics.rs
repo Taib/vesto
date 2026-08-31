@@ -1,7 +1,6 @@
-use crate::{
-    error::VestoError,
-    types::{Score, Vector},
-};
+use ndarray::{ArrayBase, Data, Ix1};
+
+use crate::{error::VestoError, types::Score};
 
 #[derive(Debug, Clone, Copy)]
 pub enum MetricsName {
@@ -21,17 +20,37 @@ impl Metric {
     pub fn new(name: MetricsName) -> Self {
         Self { name }
     }
-    pub fn distance(&self, a: &Vector, b: &Vector) -> Result<Score, VestoError> {
+    pub fn distance<S1, S2>(
+        &self,
+        a: &ArrayBase<S1, Ix1>,
+        b: &ArrayBase<S2, Ix1>,
+    ) -> Result<Score, VestoError>
+    where
+        S1: Data<Elem = f32>,
+        S2: Data<Elem = f32>,
+    {
         match self.name {
             MetricsName::Cosine => cosine_similarity(a, b),
-            _ => Ok((a - b).dot(&(a - b)).sqrt()),
+            _ => Ok(a
+                .iter()
+                .zip(b.iter())
+                .map(|(x, y)| (x - y) * (x - y))
+                .sum::<f32>()
+                .sqrt()),
         }
     }
 }
 
-// Returns 1.0 - cosine_similarity(a, b): 
+// Returns 1.0 - cosine_similarity(a, b):
 // To match the behavior of other metrics, where lower is better.
-pub fn cosine_similarity(a: &Vector, b: &Vector) -> Result<Score, VestoError> {
+pub fn cosine_similarity<S1, S2>(
+    a: &ArrayBase<S1, Ix1>,
+    b: &ArrayBase<S2, Ix1>,
+) -> Result<Score, VestoError>
+where
+    S1: Data<Elem = f32>,
+    S2: Data<Elem = f32>,
+{
     if a.dim() != b.dim() {
         return Err(VestoError::DimensionMismatch {
             expected: a.len(),
