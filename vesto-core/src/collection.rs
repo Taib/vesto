@@ -2,120 +2,117 @@ use std::collections::HashMap;
 
 use crate::{
     error::VestoError,
-    flat::VestoFlatIndex,
-    hnsw::VestoHNSWIndex,
     index::VestoIndex,
     metrics::parse_metric_from_str,
-    store::{VestoStore, VestoStoreTrait},
-    types::{EntityId, Vector},
+    types::{EntityId, Metadata, Vector},
+    vector_field::VectorField,
 };
 
-// TODO
-// pub struct VectorField {
-//     name: String,
-//     store: Box<dyn VectorStore>,
-//     indexes: HashMap<String, Box<dyn VectorIndex>>,
-// }
-// pub enum Value {
-//     Text(String),
-//     Int(i64),
-//     Float(f64),
-//     Bool(bool),
-// }
-// pub struct Metadata {
-//     fields: HashMap<String, Value>,
-// }
-// pub struct Collection {
-//     name: String,
-//     vector_fields: HashMap<String, VectorField>,
-//     metadata: HashMap<EntityId, Metadata>,
-// }
 pub type CollectionID = String;
 
-pub struct Schema {
-    pub name: String,
-    pub vfield_name: String,
-    pub metric_name: String,
-    pub dim: usize,
-}
-
 pub struct Collection {
-    pub schema: Schema,    // dim, metric, vfield name
-    pub store: VestoStore, // id -> vector + payload
-    pub indexes: HashMap<String, Box<dyn VestoIndex + Send>>,
+    pub name: String,
+    vector_fields: HashMap<String, VectorField>,
+    metadata: HashMap<EntityId, Metadata>,
 }
 
 impl Collection {
-    pub fn new(schema: Schema) -> Self {
+    pub fn new(name: &str) -> Self {
         Self {
-            indexes: HashMap::new(),
-            store: VestoStore::new(schema.dim as usize),
-            schema: schema,
+            metadata: HashMap::new(),
+            name: name.to_string(),
+            vector_fields: HashMap::new(),
         }
     }
-    pub fn insert(&mut self, vectors: Vec<Vector>) -> Result<Vec<EntityId>, VestoError> {
-        let ids = self.store.insert(vectors)?;
-        for index in self.indexes.values_mut() {
-            index.insert(ids.clone(), Some(&self.store) /* vector refs */)?;
+    pub fn insert(
+        &mut self,
+        vector_field: &str,
+        vectors: Vec<Vector>,
+        metadata: Option<Vec<Metadata>>,
+    ) -> Result<Vec<EntityId>, VestoError> {
+        if metadata.is_some() && metadata.as_ref().unwrap().len() != vectors.len() {
+            return Err(VestoError::MetadataLengthMismatch);
         }
-        Ok(ids)
+        if let Some(field) = self.vector_fields.get_mut(vector_field) {
+            let ids = field.insert(vectors)?;
+            if let Some(meta) = metadata {
+                for (id, m) in ids.iter().zip(meta.into_iter()) {
+                    self.metadata.insert(*id, m);
+                }
+            }
+            Ok(ids)
+        } else {
+            Err(VestoError::KeyNotFound)
+        }
     }
     pub fn create_index_by_type(
         &mut self,
-        name: String,
-        index_type: String,
+        vector_field: &str,
+        name: &str,
+        index_type: &str,
+        metric_name: &str,
+        dim: usize,
     ) -> Result<(), VestoError> {
-        if self.indexes.contains_key(&name) {
-            return Err(VestoError::DuplicateIndex);
+        if !self.vector_fields.contains_key(vector_field) {
+            self.add_vector_field(vector_field, dim)?;
         }
-        let metric_name = parse_metric_from_str(&self.schema.metric_name);
-        let index: Box<dyn VestoIndex + Send> = match index_type.to_lowercase().as_str() {
-            "flat" => Box::new(VestoFlatIndex::new(
-                &name,
-                &self.schema.vfield_name,
-                metric_name,
-            )),
-            "hnsw" => Box::new(VestoHNSWIndex::new(
-                &name,
-                &self.schema.vfield_name,
-                metric_name,
-                None,
-            )),
-            _ => return Err(VestoError::UnknownIndexType),
-        };
-        self.indexes.insert(name, index);
+        self.vector_fields
+            .get_mut(vector_field)
+            .unwrap()
+            .create_index_by_type(
+                name.to_string(),
+                index_type.to_string(),
+                parse_metric_from_str(metric_name),
+            )
+    }
+    pub fn add_vector_field(&mut self, name: &str, dim: usize) -> Result<(), VestoError> {
+        if self.vector_fields.contains_key(name) {
+            return Err(VestoError::DuplicateVectorField);
+        }
+        let field = VectorField::new(name, dim);
+        self.vector_fields.insert(name.to_string(), field);
         Ok(())
     }
-    pub fn add_index<I>(&mut self, index: I) -> Result<(), VestoError>
+    pub fn add_index<I>(
+        &mut self,
+        vector_field: &str,
+        index: I,
+        dim: usize,
+    ) -> Result<(), VestoError>
     where
         I: VestoIndex + Send + 'static,
     {
-        let name = index.name();
-        if self.indexes.contains_key(&name) {
-            return Err(VestoError::DuplicateIndex);
+        if !self.vector_fields.contains_key(vector_field) {
+            self.add_vector_field(vector_field, dim)?;
         }
-        self.indexes
-            .insert(name, Box::new(index))
-            .ok_or_else(|| VestoError::BadHeader)?;
-        Ok(())
+        self.vector_fields
+            .get_mut(vector_field)
+            .unwrap()
+            .add_index(index)
     }
     pub fn search(
         &self,
+        vector_field: &str,
         index_name: &str,
         query: &Vector,
         top_k: usize,
-    ) -> Result<Vec<(f32, Vector)>, VestoError> {
-        if let Some(index) = self.indexes.get(index_name) {
-            let positions = index.search(&self.store, query, top_k)?;
-            let mut ans = Vec::new();
-            for pos in positions {
-                let vector = self.store.get(&pos.1);
-                if vector.is_some() {
-                    ans.push((pos.0, vector.unwrap()));
-                }
-            }
-            return Ok(ans);
+        with_metadata: bool,
+    ) -> Result<Vec<(f32, Vector, Option<Metadata>)>, VestoError> {
+        if let Some(field) = self.vector_fields.get(vector_field) {
+            let result = field.search(index_name, query, top_k)?;
+            Ok(result
+                .into_iter()
+                .map(|(score, id, vector)| {
+                    if with_metadata {
+                        let metadata = self.metadata.get(&id).cloned();
+                        (score, vector, metadata)
+                    } else {
+                        (score, vector, None)
+                    }
+                })
+                .collect())
+        } else {
+            Err(VestoError::KeyNotFound)
         }
-        return Err(VestoError::KeyNotFound);
     }
 }

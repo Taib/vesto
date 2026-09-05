@@ -8,15 +8,18 @@ from vesto import Vesto
 
 db = Vesto()
 
-collection = db.add_collection("docs", "embedding", "cosine", 2)
+collection = db.add_collection("docs")
 
-collection.add_index("hnsw_idx", "hnsw")
+vector_field = "my_vector_field"
+collection.add_index(vector_field, "flat_idx", "flat", "cosine", 2)
 
 ids = collection.insert(
+    vector_field,
     [
         [1.0, 0.0],
         [0.0, 1.0],
-    ]
+    ],
+    [{"metadata": "doc1"}, {"metadata": "doc2"}]
 )
 
 # len(db) counts collections
@@ -24,7 +27,7 @@ assert len(db) == 1
 assert ids == [0, 1]  # insert returns the minted EntityIds as u64s
 
 # search takes the index name, returns (score, vector) pairs.
-results = collection.search("hnsw_idx", [1.0, 0.0], 1)
+results = collection.search(vector_field, "flat_idx", [1.0, 0.0], 1, False)
 
 score, vector = results[0]
 assert vector == [1.0, 0.0]  # nearest to [1,0] is itself

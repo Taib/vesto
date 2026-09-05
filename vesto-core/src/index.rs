@@ -6,7 +6,6 @@ use crate::{
 
 pub trait VestoIndex {
     fn name(&self) -> String;
-    fn vfield_name(&self) -> String;
     fn insert(
         &mut self,
         data: Vec<EntityId>,

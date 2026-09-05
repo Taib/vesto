@@ -4,11 +4,12 @@ use std::{
 };
 
 mod error;
-mod types;
+pub mod types;
 mod store;
 mod index;
 mod metrics;
 pub mod collection;
+pub mod vector_field;
 mod flat;
 mod hnsw;
 
@@ -29,7 +30,7 @@ impl Vesto {
         &mut self,
         collection: Collection,
     ) -> Result<Arc<Mutex<Collection>>, VestoError> {
-        let name = collection.schema.name.clone();
+        let name = collection.name.clone();
         if self.collections.contains_key(&name) {
             return Err(VestoError::DuplicateCollection);
         }

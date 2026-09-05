@@ -6,13 +6,12 @@ use crate::types::{EntityId, Score, Vector};
 
 pub struct VestoFlatIndex {
     name: String,
-    vfield_name: String,
     data: Vec<EntityId>,
     metric: Metric,
 }
 
 impl VestoFlatIndex {
-    pub fn new(name: &str, vfield_name: &str, metric_name: crate::metrics::MetricsName) -> Self
+    pub fn new(name: &str, metric_name: crate::metrics::MetricsName) -> Self
     where
         Self: Sized,
     {
@@ -20,7 +19,6 @@ impl VestoFlatIndex {
             data: Vec::new(),
             metric: Metric::new(metric_name),
             name: String::from(name),
-            vfield_name: String::from(vfield_name),
         }
     }
     pub fn len(&self) -> usize {
@@ -65,9 +63,6 @@ impl VestoIndex for VestoFlatIndex {
     fn name(&self) -> String {
         self.name.clone()
     }
-    fn vfield_name(&self) -> String {
-        self.vfield_name.clone()
-    }
 }
 
 #[cfg(test)]
@@ -79,7 +74,7 @@ mod test {
     #[test]
     fn search_returns_best_match() {
         println!("Vector data: Vesto");
-        let mut index = VestoFlatIndex::new("test", "test", crate::metrics::MetricsName::Cosine);
+        let mut index = VestoFlatIndex::new("test", crate::metrics::MetricsName::Cosine);
         let mut store = VestoStore::new(3);
         let ids = store
             .insert(vec![

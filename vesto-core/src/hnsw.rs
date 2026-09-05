@@ -267,7 +267,6 @@ impl HNSWGraph {
 
 pub struct VestoHNSWIndex {
     name: String,
-    vfield_name: String,
     data: HNSWGraph,
 
     max_connections: usize,
@@ -285,7 +284,6 @@ pub struct VestoHNSWIndexExtraParams {
 impl VestoHNSWIndex {
     pub fn new(
         name: &str,
-        vfield_name: &str,
         metric_name: crate::metrics::MetricsName,
         extra: Option<VestoHNSWIndexExtraParams>,
     ) -> Self
@@ -300,7 +298,6 @@ impl VestoHNSWIndex {
         });
         Self {
             name: String::from(name),
-            vfield_name: String::from(vfield_name),
             data: HNSWGraph {
                 layers: Vec::new(),
                 metric: Metric::new(metric_name),
@@ -324,10 +321,6 @@ impl VestoHNSWIndex {
 impl VestoIndex for VestoHNSWIndex {
     fn name(&self) -> String {
         self.name.clone()
-    }
-
-    fn vfield_name(&self) -> String {
-        self.vfield_name.clone()
     }
 
     fn insert(
@@ -387,7 +380,7 @@ mod recall_test {
             ])
             .unwrap();
 
-        let mut hnsw = VestoHNSWIndex::new("h", "v", crate::metrics::MetricsName::L2, None);
+        let mut hnsw = VestoHNSWIndex::new("h", crate::metrics::MetricsName::L2, None);
         hnsw.insert(ids.clone(), Some(&store)).unwrap();
 
         let query = array![0.95, 0.08]; // clearly closest to id 1 [0.9, 0.1]
@@ -408,9 +401,9 @@ mod recall_test {
         let ids = store.insert(vecs).unwrap();
 
         // build both indexes
-        let mut flat = VestoFlatIndex::new("flat", "v", MetricsName::L2);
+        let mut flat = VestoFlatIndex::new("flat", MetricsName::L2);
         flat.insert(ids.clone(), Some(&store)).unwrap();
-        let mut hnsw = VestoHNSWIndex::new("hnsw", "v", MetricsName::L2, None);
+        let mut hnsw = VestoHNSWIndex::new("hnsw", MetricsName::L2, None);
         let t = std::time::Instant::now();
         hnsw.insert(ids.clone(), Some(&store)).unwrap();
         println!("hnsw build: {:?}", t.elapsed());
@@ -447,7 +440,10 @@ mod recall_test {
         avg_hnsw_search_time /= 30.0;
         println!("avg flat search time: {avg_flat_search_time:.3} ms");
         println!("avg hnsw search time: {avg_hnsw_search_time:.3} ms");
-        println!("speedup: {:.2}x", avg_flat_search_time / avg_hnsw_search_time);
+        println!(
+            "speedup: {:.2}x",
+            avg_flat_search_time / avg_hnsw_search_time
+        );
         println!("recall@{k} = {recall:.3}");
         assert!(recall > 0.8, "recall too low: {recall}");
     }

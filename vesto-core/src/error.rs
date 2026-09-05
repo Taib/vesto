@@ -13,7 +13,9 @@ pub enum VestoError {
     DuplicateCollection,
     UnknownIndexType,
     RequiredParameterMissing { param: String },
-    EmptyIndex
+    EmptyIndex,
+    MetadataLengthMismatch,
+    DuplicateVectorField
 }
 impl std::fmt::Display for VestoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -38,6 +40,9 @@ impl std::fmt::Display for VestoError {
                 write!(f, "Required parameter {param:?} is missing.")
             },
             Self::EmptyIndex => write!(f, "Empty Index"),
+            Self::MetadataLengthMismatch => write!(f, "Metadata length does not match vectors length."),
+            Self::DuplicateVectorField => write!(f, "Duplicate Vector Field"),
+
         }
     }
 }
