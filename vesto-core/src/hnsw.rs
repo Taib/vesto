@@ -45,6 +45,9 @@ struct HNSWGraph {
     layers: Vec<Layer>,
     metric: Metric,
     entry_point: Option<EntityId>,
+    use_heuristic_selection: bool,
+    heuristic_keep_pruned_connections: bool, // flag indicating whether or not to add discarded elements
+    heuristic_extend_candidates: bool, // flag indicating whether or not to extend candidate list
 }
 
 impl HNSWGraph {
@@ -53,11 +56,13 @@ impl HNSWGraph {
         self.metric.distance(&v, query).unwrap()
     }
     fn knn_search(
-        &self,                           //
-        store_get: &dyn VestoStoreTrait, //
-        query: &Vector,                  // query element
-        k: usize,                        // number of nearest neighbors to return
-        ef: usize,                       // size of the dynamic candidate list
+        &self,                                 //
+        store_get: &dyn VestoStoreTrait,       //
+        query: &Vector,                        // query element
+        k: usize,                              // number of nearest neighbors to return
+        ef: usize,                             // size of the dynamic candidate list
+        extend_candidates: Option<bool>, // flag indicating whether or not to extend candidate list
+        keep_pruned_connections: Option<bool>, // flag indicating whether or not to add
     ) -> Result<Vec<(f32, EntityId)>, VestoError> {
         let mut W; // set for the current nearest elements
         let mut ep = vec![self.entry_point.ok_or(VestoError::EmptyIndex)?]; // get enter point for hnsw
@@ -70,16 +75,25 @@ impl HNSWGraph {
         }
         W = self.search_layer(store_get, &query, &ep, ef, 0);
 
-        Ok(self.select_neighbors(store_get, &query, &W, k)?)
+        Ok(self.select_neighbors(
+            store_get,
+            &query,
+            &W,
+            k,
+            extend_candidates,
+            keep_pruned_connections,
+        )?)
     }
     fn insert(
         &mut self,
         store_get: &dyn VestoStoreTrait, //
         item: EntityId,
-        M: usize,               // number of established connections
-        M_max: usize,           //maximum number of connections for each element per layer
+        M: usize,                              // number of established connections
+        M_max: usize, //maximum number of connections for each element per layer
         ef_construction: usize, // size of the dynamic candidate list
-        m_l: f32,               // normalization factor for level generation
+        m_l: f32,     // normalization factor for level generation
+        extend_candidates: Option<bool>, // flag indicating whether or not to extend candidate list
+        keep_pruned_connections: Option<bool>, // flag indicating whether or not to add discarded elements
     ) -> Result<(), VestoError> {
         let mut W;
         let mut ep = vec![self.entry_point.unwrap_or(item)]; // get entry points for hnsw
@@ -98,7 +112,16 @@ impl HNSWGraph {
         for lc in (0..min(L, l) + 1).rev() {
             let Mmax = if lc == 0 { M * 2 } else { M_max };
             W = self.search_layer(store_get, &query, &ep, ef_construction, lc);
-            let neighbors = self.select_neighbors(store_get, &query, &W, M).unwrap();
+            let neighbors = self
+                .select_neighbors(
+                    store_get,
+                    &query,
+                    &W,
+                    M,
+                    extend_candidates,
+                    keep_pruned_connections,
+                )
+                .unwrap();
             // add bidirectionall connectionts from neighbors to q at layer lc
             self.layers[lc]
                 .adjacency
@@ -113,7 +136,7 @@ impl HNSWGraph {
                     // shrink connections of e
                     let e_vector = store_get.get(&e).unwrap();
                     let e_new_conn = self
-                        .select_neighbors(store_get, &e_vector, e_conn, Mmax)
+                        .select_neighbors(store_get, &e_vector, e_conn, Mmax, None, None)
                         .unwrap();
                     // update neighbourhood of e at layer lc to e_new_conn;
                     self.layers[lc].adjacency.remove(&e);
@@ -153,7 +176,20 @@ impl HNSWGraph {
         query: &Vector,
         W: &[EntityId],
         M: usize,
+        extend_candidates: Option<bool>,
+        keep_pruned_connections: Option<bool>,
     ) -> Result<Vec<(f32, EntityId)>, VestoError> {
+        if self.use_heuristic_selection {
+            return self.select_neighbors_heuristic(
+                store_get,
+                query,
+                W.to_vec(),
+                M,
+                0,
+                extend_candidates.unwrap_or(self.heuristic_extend_candidates),
+                keep_pruned_connections.unwrap_or(self.heuristic_keep_pruned_connections),
+            );
+        }
         let mut scores = W
             .iter()
             .filter_map(|el| {
@@ -242,16 +278,16 @@ impl HNSWGraph {
     fn nearest_element(
         &self,
         store_get: &dyn VestoStoreTrait, //
-        set: &Vec<EntityId>,
+        ids_list: &Vec<EntityId>,
         query: &Vector, // query element
     ) -> Option<(usize, EntityId)> {
-        if set.is_empty() {
+        if ids_list.is_empty() {
             return None;
         }
         let mut min_score = f32::INFINITY;
-        let mut response = set[0];
+        let mut response = ids_list[0];
         let mut min_pos: usize = 0;
-        for (pos, el) in set.iter().enumerate() {
+        for (pos, el) in ids_list.iter().enumerate() {
             if let Some(vector) = store_get.get(el) {
                 let score = self.metric.distance(query, &vector).unwrap();
                 if score < min_score {
@@ -262,6 +298,70 @@ impl HNSWGraph {
             }
         }
         return Some((min_pos, response));
+    }
+
+    fn select_neighbors_heuristic(
+        &self,                           //
+        store_get: &dyn VestoStoreTrait, //
+        query: &Vector,
+        candidates_list: Vec<EntityId>, // candidate elements
+        max_neighbors: usize,           // number of neighbors to return
+        lc: usize,                      // layer number
+        extend_candidates: bool,        // flag indicating whether or not to extend candidate list
+        keep_pruned_connections: bool,  // flag indicating whether or not to add discarded elements
+    ) -> Result<Vec<(f32, EntityId)>, VestoError> {
+        let mut result: Vec<(f32, EntityId)> = Vec::new();
+        let mut work_set: BinaryHeap<Reverse<Candidate>> = BinaryHeap::new();
+
+        for e in &candidates_list {
+            let ep_dist = self.dist(store_get, e, query);
+            work_set.push(Reverse(Candidate {
+                dist: ep_dist,
+                id: *e,
+            }));
+        }
+
+        if extend_candidates {
+            // Implementation for extending candidates
+            for e in &candidates_list {
+                for e_adj in self.neighbourhood(e, lc) {
+                    work_set.push(Reverse(Candidate {
+                        dist: self.dist(store_get, e_adj, query),
+                        id: *e_adj,
+                    }));
+                }
+            }
+        }
+        let mut discard_set: BinaryHeap<Reverse<Candidate>> = BinaryHeap::new();
+        while let Some(Reverse(w)) = work_set.pop()
+            && result.len() < max_neighbors
+        {
+            let w_vec = store_get.get(&w.id).unwrap();
+            let closest_in_result = result
+                .iter()
+                .map(|(_, e)| self.dist(store_get, e, &w_vec))
+                .min_by(|a, b| a.partial_cmp(b).unwrap());
+            if result.len() == 0 {
+                result.push((w.dist, w.id));
+            } else {
+                if closest_in_result.unwrap() > w.dist {
+                    result.push((w.dist, w.id));
+                } else {
+                    discard_set.push(Reverse(Candidate {
+                        dist: w.dist,
+                        id: w.id,
+                    }));
+                }
+            }
+        }
+        if keep_pruned_connections {
+            while let Some(Reverse(w_d)) = discard_set.pop()
+                && result.len() < max_neighbors
+            {
+                result.push((w_d.dist, w_d.id));
+            }
+        }
+        Ok(result)
     }
 }
 
@@ -275,10 +375,13 @@ pub struct VestoHNSWIndex {
     m_l: f32,
 }
 pub struct VestoHNSWIndexExtraParams {
-    max_connections: usize,           // number of established connections
+    max_connections: usize,                // number of established connections
     max_connections_per_layer: usize, //maximum number of connections for each element per layer
     ef_construction: usize,           // size of the dynamic candidate list
     m_l: f32,                         // normalization factor for level generation
+    use_heuristic_selection: bool,    // flag indicating whether or not to use heuristic selection
+    extend_candidates: Option<bool>,  // flag indicating whether or not to extend candidate list
+    keep_pruned_connections: Option<bool>, // flag indicating whether or not to add discarded elements
 }
 
 impl VestoHNSWIndex {
@@ -295,6 +398,9 @@ impl VestoHNSWIndex {
             max_connections_per_layer: 16,
             ef_construction: 100,
             m_l: 1.0 / (16f32).ln(),
+            use_heuristic_selection: true,
+            extend_candidates: None,
+            keep_pruned_connections: None,
         });
         Self {
             name: String::from(name),
@@ -302,6 +408,9 @@ impl VestoHNSWIndex {
                 layers: Vec::new(),
                 metric: Metric::new(metric_name),
                 entry_point: None,
+                use_heuristic_selection: extra.use_heuristic_selection,
+                heuristic_extend_candidates: extra.extend_candidates.unwrap_or(false),
+                heuristic_keep_pruned_connections: extra.keep_pruned_connections.unwrap_or(true),
             },
             ef_construction: extra.ef_construction,
             m_l: extra.m_l,
@@ -341,6 +450,8 @@ impl VestoIndex for VestoHNSWIndex {
                 self.max_connections_per_layer,
                 self.ef_construction,
                 self.m_l,
+                Some(self.data.heuristic_extend_candidates),
+                Some(self.data.heuristic_keep_pruned_connections),
             )?;
         }
         Ok(())
@@ -352,9 +463,14 @@ impl VestoIndex for VestoHNSWIndex {
         query: &Vector,
         top_k: usize,
     ) -> Result<Vec<(Score, EntityId)>, VestoError> {
-        let results = self
-            .data
-            .knn_search(store_get, &query, top_k, self.ef_construction)?;
+        let results = self.data.knn_search(
+            store_get,
+            &query,
+            top_k,
+            self.ef_construction,
+            Some(self.data.heuristic_extend_candidates),
+            Some(self.data.heuristic_keep_pruned_connections),
+        )?;
         return Ok(results);
     }
 }
@@ -386,6 +502,50 @@ mod recall_test {
         let query = array![0.95, 0.08]; // clearly closest to id 1 [0.9, 0.1]
         let results = hnsw.search(&store, &query, 2).unwrap();
         assert_eq!(results[0].1, ids[1]);
+    }
+
+    #[test]
+    fn heuristic_favors_diversity_over_closest_pair() {
+        // A1 and A2 sit right next to each other in the same direction from
+        // the query; B is a bit farther from the query but points a
+        // different way. Simple top-M selection should pick the closest
+        // pair (A1, A2), even though A2 is redundant with A1. The heuristic
+        // should prune the redundant A2 in favor of the more diverse B.
+        let mut store = VestoStore::new(2);
+        let ids = store
+            .insert(vec![
+                array![1.0, 0.0],  // id 0 = A1, dist to query = 1.0
+                array![1.0, 0.2],  // id 1 = A2, dist to query ~= 1.02, clustered next to A1
+                array![0.0, 1.05], // id 2 = B,  dist to query = 1.05, different direction
+            ])
+            .unwrap();
+        let query = array![0.0, 0.0];
+
+        let mut graph = HNSWGraph {
+            layers: Vec::new(),
+            metric: Metric::new(MetricsName::L2),
+            entry_point: None,
+            use_heuristic_selection: false,
+            heuristic_extend_candidates: false,
+            heuristic_keep_pruned_connections: false,
+        };
+
+        let simple: HashSet<_> = graph
+            .select_neighbors(&store, &query, &ids, 2, None, None)
+            .unwrap()
+            .into_iter()
+            .map(|(_, id)| id)
+            .collect();
+        assert_eq!(simple, HashSet::from([ids[0], ids[1]]));
+
+        graph.use_heuristic_selection = true;
+        let heuristic: HashSet<_> = graph
+            .select_neighbors(&store, &query, &ids, 2, None, None)
+            .unwrap()
+            .into_iter()
+            .map(|(_, id)| id)
+            .collect();
+        assert_eq!(heuristic, HashSet::from([ids[0], ids[2]]));
     }
 
     #[test]
