@@ -47,7 +47,7 @@ class VestoCollection:
             metric_name: metric name (L2, COSINE)
             dim: dimension of the vectors
         """
-    def insert(self, vector_field: builtins.str, vectors: typing.Sequence[typing.Sequence[builtins.float]], metadata: typing.Sequence[dict]) -> builtins.list[builtins.int]:
+    def insert(self, vector_field: builtins.str, vectors: typing.Sequence[typing.Sequence[builtins.float]], metadata: typing.Sequence[dict], params: typing.Optional[dict]) -> builtins.list[builtins.int]:
         r"""
         Insert vectors in the collection. This will update all the indexes attached.
         Return the entity_ids of the vectors inserted.
@@ -56,8 +56,9 @@ class VestoCollection:
             vector_field: name of the vector field
             vectors: list of vectors
             metadata: list of metadata for each vector
+            params: additional parameters for the insert, depending on the index type.
         """
-    def search(self, vector_field: builtins.str, index_name: builtins.str, query: typing.Sequence[builtins.float], top_k: builtins.int, with_metadata: builtins.bool) -> builtins.list[tuple[builtins.float, builtins.list[builtins.float]]]:
+    def search(self, vector_field: builtins.str, index_name: builtins.str, query: typing.Sequence[builtins.float], top_k: builtins.int, with_metadata: builtins.bool, params: typing.Optional[dict]) -> builtins.list[tuple[builtins.float, builtins.list[builtins.float]]]:
         r"""
         Search a vector using a given index.
         
@@ -65,5 +66,7 @@ class VestoCollection:
             index_name: index name
             query: query vector
             top_k: top k matches
+            with_metadata: whether to return metadata on the results
+            params: additional parameters for the search, depending on the index type.
         """
 

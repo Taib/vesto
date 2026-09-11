@@ -29,12 +29,13 @@ impl Collection {
         vector_field: &str,
         vectors: Vec<Vector>,
         metadata: Option<Vec<Metadata>>,
+        params: Option<&serde_json::Value>,
     ) -> Result<Vec<EntityId>, VestoError> {
         if metadata.is_some() && metadata.as_ref().unwrap().len() != vectors.len() {
             return Err(VestoError::MetadataLengthMismatch);
         }
         if let Some(field) = self.vector_fields.get_mut(vector_field) {
-            let ids = field.insert(vectors)?;
+            let ids = field.insert(vectors, params)?;
             if let Some(meta) = metadata {
                 for (id, m) in ids.iter().zip(meta.into_iter()) {
                     self.metadata.insert(*id, m);
@@ -97,9 +98,10 @@ impl Collection {
         query: &Vector,
         top_k: usize,
         with_metadata: bool,
+        params: Option<&serde_json::Value>,
     ) -> Result<Vec<(f32, Vector, Option<Metadata>)>, VestoError> {
         if let Some(field) = self.vector_fields.get(vector_field) {
-            let result = field.search(index_name, query, top_k)?;
+            let result = field.search(index_name, query, top_k, params)?;
             Ok(result
                 .into_iter()
                 .map(|(score, id, vector)| {

@@ -24,12 +24,17 @@ impl VectorField {
             indexes: HashMap::new(),
         }
     }
-    pub fn insert(&mut self, vectors: Vec<Vector>) -> Result<Vec<EntityId>, VestoError> {
+    pub fn insert(
+        &mut self,
+        vectors: Vec<Vector>,
+        params: Option<&serde_json::Value>,
+    ) -> Result<Vec<EntityId>, VestoError> {
         let ids = self.store.insert(vectors)?;
         for index in self.indexes.values_mut() {
             index.insert(
                 ids.clone(),
                 Some(self.store.as_ref()), /* vector refs */
+                params,
             )?;
         }
         Ok(ids)
@@ -69,9 +74,10 @@ impl VectorField {
         index_name: &str,
         query: &Vector,
         top_k: usize,
+        params: Option<&serde_json::Value>,
     ) -> Result<Vec<(f32, EntityId, Vector)>, VestoError> {
         if let Some(index) = self.indexes.get(index_name) {
-            let positions = index.search(self.store.as_ref(), query, top_k)?;
+            let positions = index.search(self.store.as_ref(), query, top_k, params)?;
             let mut ans = Vec::new();
             for pos in positions {
                 let vector = self.store.get(&pos.1);

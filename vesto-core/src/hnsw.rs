@@ -425,6 +425,61 @@ impl VestoHNSWIndex {
     pub fn is_empty(&self) -> bool {
         self.data.layers.is_empty()
     }
+
+    fn extract_from_json_params(
+        &self,
+        params: Option<&serde_json::Value>,
+    ) -> VestoHNSWIndexExtraParams {
+        if params.is_none() {
+            return VestoHNSWIndexExtraParams {
+                max_connections: self.max_connections,
+                max_connections_per_layer: self.max_connections_per_layer,
+                ef_construction: self.ef_construction,
+                m_l: self.m_l,
+                use_heuristic_selection: self.data.use_heuristic_selection,
+                extend_candidates: None,
+                keep_pruned_connections: None,
+            };
+        }
+        let params = params.unwrap();
+        let max_connections = params
+            .get("max_connections")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(self.max_connections);
+        let max_connections_per_layer = params
+            .get("max_connections_per_layer")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(self.max_connections_per_layer);
+        let ef_construction = params
+            .get("ef_construction")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(self.ef_construction);
+        let m_l = params
+            .get("m_l")
+            .and_then(|v| v.as_f64())
+            .map(|v| v as f32)
+            .unwrap_or(self.m_l);
+        let use_heuristic_selection = params
+            .get("use_heuristic_selection")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(self.data.use_heuristic_selection);
+        let extend_candidates = params.get("extend_candidates").and_then(|v| v.as_bool());
+        let keep_pruned_connections = params
+            .get("keep_pruned_connections")
+            .and_then(|v| v.as_bool());
+        VestoHNSWIndexExtraParams {
+            max_connections,
+            max_connections_per_layer,
+            ef_construction,
+            m_l,
+            use_heuristic_selection,
+            extend_candidates,
+            keep_pruned_connections,
+        }
+    }
 }
 
 impl VestoIndex for VestoHNSWIndex {
@@ -436,22 +491,24 @@ impl VestoIndex for VestoHNSWIndex {
         &mut self,
         data: Vec<EntityId>,
         store_get: Option<&dyn VestoStoreTrait>,
+        params: Option<&serde_json::Value>,
     ) -> Result<(), VestoError> {
         if store_get.is_none() {
             return Err(VestoError::RequiredParameterMissing {
                 param: "store".to_string(),
             });
         }
+        let params = self.extract_from_json_params(params);
         for id in &data {
             self.data.insert(
                 store_get.unwrap(),
                 id.clone(),
-                self.max_connections,
-                self.max_connections_per_layer,
-                self.ef_construction,
-                self.m_l,
-                Some(self.data.heuristic_extend_candidates),
-                Some(self.data.heuristic_keep_pruned_connections),
+                params.max_connections,
+                params.max_connections_per_layer,
+                params.ef_construction,
+                params.m_l,
+                params.extend_candidates,
+                params.keep_pruned_connections,
             )?;
         }
         Ok(())
@@ -462,14 +519,16 @@ impl VestoIndex for VestoHNSWIndex {
         store_get: &dyn VestoStoreTrait,
         query: &Vector,
         top_k: usize,
+        params: Option<&serde_json::Value>,
     ) -> Result<Vec<(Score, EntityId)>, VestoError> {
+        let params = self.extract_from_json_params(params);
         let results = self.data.knn_search(
             store_get,
             &query,
             top_k,
-            self.ef_construction,
-            Some(self.data.heuristic_extend_candidates),
-            Some(self.data.heuristic_keep_pruned_connections),
+            params.ef_construction,
+            params.extend_candidates,
+            params.keep_pruned_connections,
         )?;
         return Ok(results);
     }
@@ -497,10 +556,10 @@ mod recall_test {
             .unwrap();
 
         let mut hnsw = VestoHNSWIndex::new("h", crate::metrics::MetricsName::L2, None);
-        hnsw.insert(ids.clone(), Some(&store)).unwrap();
+        hnsw.insert(ids.clone(), Some(&store), None).unwrap();
 
         let query = array![0.95, 0.08]; // clearly closest to id 1 [0.9, 0.1]
-        let results = hnsw.search(&store, &query, 2).unwrap();
+        let results = hnsw.search(&store, &query, 2, None).unwrap();
         assert_eq!(results[0].1, ids[1]);
     }
 
@@ -562,10 +621,10 @@ mod recall_test {
 
         // build both indexes
         let mut flat = VestoFlatIndex::new("flat", MetricsName::L2);
-        flat.insert(ids.clone(), Some(&store)).unwrap();
+        flat.insert(ids.clone(), Some(&store), None).unwrap();
         let mut hnsw = VestoHNSWIndex::new("hnsw", MetricsName::L2, None);
         let t = std::time::Instant::now();
-        hnsw.insert(ids.clone(), Some(&store)).unwrap();
+        hnsw.insert(ids.clone(), Some(&store), None).unwrap();
         println!("hnsw build: {:?}", t.elapsed());
 
         // query with several stored vectors, compare top-10
@@ -578,7 +637,7 @@ mod recall_test {
             let q = store.get(&qid).unwrap();
             let t = std::time::Instant::now();
             let truth: HashSet<_> = flat
-                .search(&store, &q, k)
+                .search(&store, &q, k, None)
                 .unwrap()
                 .into_iter()
                 .map(|(_, id)| id)
@@ -586,7 +645,7 @@ mod recall_test {
             avg_flat_search_time += t.elapsed().as_millis() as f32;
             let t = std::time::Instant::now();
             let got: HashSet<_> = hnsw
-                .search(&store, &q, k)
+                .search(&store, &q, k, None)
                 .unwrap()
                 .into_iter()
                 .map(|(_, id)| id)

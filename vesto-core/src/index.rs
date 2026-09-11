@@ -10,11 +10,13 @@ pub trait VestoIndex {
         &mut self,
         data: Vec<EntityId>,
         store_get: Option<&dyn crate::store::VestoStoreTrait>,
+        params: Option<&serde_json::Value>,
     ) -> Result<(), VestoError>;
     fn search(
         &self,
         store_get: &dyn VestoStoreTrait,
         query: &Vector,
         top_k: usize,
+        params: Option<&serde_json::Value>,
     ) -> Result<Vec<(Score, EntityId)>, VestoError>;
 }
