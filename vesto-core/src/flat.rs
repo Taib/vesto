@@ -35,6 +35,7 @@ impl VestoIndex for VestoFlatIndex {
         &mut self,
         data: Vec<EntityId>,
         _: Option<&dyn crate::store::VestoStoreTrait>,
+        _: Option<&serde_json::Value>,
     ) -> Result<(), VestoError> {
         self.data.extend(data);
         Ok(())
@@ -44,6 +45,7 @@ impl VestoIndex for VestoFlatIndex {
         store_get: &dyn VestoStoreTrait,
         query: &Vector,
         top_k: usize,
+        _: Option<&serde_json::Value>,
     ) -> Result<Vec<(Score, EntityId)>, VestoError> {
         let mut scores = self
             .data
@@ -84,8 +86,8 @@ mod test {
                 array![0.0, 0.0, 1.0],
             ])
             .unwrap();
-        index.insert(ids, None).unwrap();
-        let results = index.search(&store, &array![1.0, 0.1, 0.0], 2).unwrap();
+        index.insert(ids, None, None).unwrap();
+        let results = index.search(&store, &array![1.0, 0.1, 0.0], 2, None).unwrap();
         assert_eq!(results[0].1, EntityId(1));
     }
 }

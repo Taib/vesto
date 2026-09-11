@@ -14,7 +14,8 @@ def test_base():
             [1.0, 0.0],
             [0.0, 1.0],
         ],
-        [{"metadata": "doc1"}, {"metadata": "doc2"}]
+        [{"metadata": "doc1"}, {"metadata": "doc2"}],
+        None
     )
 
     # len(db) counts collections
@@ -22,7 +23,7 @@ def test_base():
     assert ids == [0, 1]  # insert returns the minted EntityIds as u64s
 
     # search takes the index name, returns (score, vector) pairs.
-    results = collection.search(vector_field, "flat_idx", [1.0, 0.0], 1, False)
+    results = collection.search(vector_field, "flat_idx", [1.0, 0.0], 1, False, None)
 
     score, vector = results[0]
     assert vector == [1.0, 0.0]  # nearest to [1,0] is itself
@@ -44,7 +45,8 @@ def test_hnsw():
             [1.0, 0.0],
             [0.0, 1.0],
         ],
-        [{"metadata": "doc1"}, {"metadata": "doc2"}]
+        [{"metadata": "doc1"}, {"metadata": "doc2"}],
+        None
     )
 
     # len(db) counts collections
@@ -52,7 +54,11 @@ def test_hnsw():
     assert ids == [0, 1]  # insert returns the minted EntityIds as u64s
 
     # search takes the index name, returns (score, vector) pairs.
-    results = collection.search(vector_field, "hnsw_idx", [1.0, 0.0], 1, False)
+    results = collection.search(vector_field, "hnsw_idx", [1.0, 0.0], 1, False, {
+        "ef_construction": 1,
+        "extend_candidates": False,
+        "keep_pruned_connections": False
+    })
 
     score, vector = results[0]
     assert vector == [1.0, 0.0]  # nearest to [1,0] is itself
@@ -74,15 +80,29 @@ def test_hnsw_flat_recall():
     collection.add_index(vector_field, "hnsw_idx", "hnsw", "l2", dim)
 
     vectors = [[random.random() for _ in range(dim)] for _ in range(n)]
-    collection.insert(vector_field, vectors, [])
+    collection.insert(vector_field, vectors, [], None)
 
     # query with several stored vectors, compare top-10
     k = 10
     hits = 0
     total = 0
     for query in vectors[:30]:
-        truth = {tuple(v) for _, v in collection.search(vector_field, "flat_idx", query, k, False)}
-        got = {tuple(v) for _, v in collection.search(vector_field, "hnsw_idx", query, k, False)}
+        truth = {tuple(v) for _, v in collection.search(vector_field, "flat_idx", query, k, False, None)}
+        got = {
+            tuple(v) 
+            for _, v in collection.search(
+                vector_field,
+                "hnsw_idx", 
+                query, 
+                k, 
+                False, 
+                {
+                    "ef_construction": 10,
+                    "extend_candidates": False,
+                    "keep_pruned_connections": True
+                }
+            )
+        }
         hits += len(truth & got)
         total += len(truth)
 

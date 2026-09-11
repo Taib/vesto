@@ -33,6 +33,26 @@ fn python_dict_to_metadata(dict: &Bound<'_, PyDict>) -> PyResult<vesto_core::typ
     Ok(vesto_core::types::Metadata { fields })
 }
 
+fn pydict_to_json_value(dict: &Bound<'_, PyDict>) -> PyResult<serde_json::Value> {
+    let mut map = serde_json::Map::new();
+    for (key, value) in dict.iter() {
+        let key: String = key.extract().map_err(to_py)?;
+        let value: serde_json::Value = if let Ok(b) = value.extract::<bool>() {
+                serde_json::Value::Bool(b)
+            } else if let Ok(i) = value.extract::<i64>() {
+                serde_json::Value::Number(serde_json::Number::from(i))
+            } else if let Ok(f) = value.extract::<f32>() {
+                serde_json::Value::Number(serde_json::Number::from_f64(f as f64).unwrap())
+            } else if let Ok(s) = value.extract::<String>() {
+                serde_json::Value::String(s)
+            } else {
+                return Err(to_py(format!("Unsupported metadata type for key {key:?}")));
+            };
+            map.insert(key, value);
+        }
+    Ok(serde_json::Value::Object(map))
+}
+
 #[gen_stub_pyclass]
 #[pyclass(name = "VestoCollection")]
 struct PyVestoCollection {
@@ -72,12 +92,16 @@ impl PyVestoCollection {
     ///     vector_field: name of the vector field
     ///     vectors: list of vectors
     ///     metadata: list of metadata for each vector
+    ///     params: additional parameters for the insert, depending on the index type.
     fn insert(
         &self,
         vector_field: &str,
         vectors: Vec<Vec<f32>>,
         metadata: Vec<Bound<'_, PyDict>>,
+        params: Option<Bound<'_, PyDict>>,
     ) -> PyResult<Vec<u64>> {
+
+        let params = params.map(|p| pydict_to_json_value(&p)).transpose().map_err(to_py)?;
         let metadata = metadata
             .into_iter()
             .map(|dict| python_dict_to_metadata(&dict))
@@ -94,6 +118,7 @@ impl PyVestoCollection {
                     } else {
                         Some(metadata)
                     },
+                    params.as_ref(),
                 )
                 .map_err(to_py)?
         };
@@ -106,6 +131,8 @@ impl PyVestoCollection {
     ///     index_name: index name
     ///     query: query vector
     ///     top_k: top k matches
+    ///     with_metadata: whether to return metadata on the results
+    ///     params: additional parameters for the search, depending on the index type.
     fn search(
         &self,
         vector_field: &str,
@@ -113,12 +140,14 @@ impl PyVestoCollection {
         query: Vec<f32>,
         top_k: usize,
         with_metadata: bool,
+        params: Option<Bound<'_, PyDict>>,
     ) -> PyResult<Vec<(f32, Vec<f32>)>> {
+        let params = params.map(|p| pydict_to_json_value(&p)).transpose().map_err(to_py)?;
         let query = Array1::from(query);
         let results = {
             let collection = self.inner.lock().map_err(to_py)?;
             collection
-                .search(vector_field, index_name, &query, top_k, with_metadata)
+                .search(vector_field, index_name, &query, top_k, with_metadata, params.as_ref())
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{e:?}")))?
         };
         Ok(results
